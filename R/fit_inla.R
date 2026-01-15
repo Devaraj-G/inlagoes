@@ -1,4 +1,5 @@
 library(INLA)
+library(fmesher)
 library(terra)
 
 source("./R/convert_units.R")
@@ -35,7 +36,7 @@ data_inla <- data.frame(sst = xy_obs1,
                         y = xy[ , 2])
 sst=xy_obs1
 # Create mesh
-mesh <- inla.mesh.2d(
+mesh <- fm_mesh_2d_inla(
   loc = xy,
   max.edge = c(10,1.0),
   cutoff = 0.1
