@@ -5,6 +5,7 @@ data/
 
 # File types
 ## Documents
+*.html
 *.doc
 *.docx
 *.xls
@@ -531,7 +532,7 @@ TSWLatexianTemp*
 # ----------------------
 # VisualStudioCode------
 # ----------------------
-  
+
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json

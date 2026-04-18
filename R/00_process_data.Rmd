@@ -1,0 +1,105 @@
+---
+title: "Process satellite data"
+author: "Devaraj Gopinathan"
+date: "Generated on `r format(Sys.time(), '%Y-%m-%d')`"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+### Importing libraries
+
+```{r results = "hide", warning = FALSE, message = FALSE}
+library(ggplot2)
+library(patchwork)
+library(terra)
+library(dplyr)
+```
+
+### Importing functions
+
+```{r results = "hide", warning = FALSE, message = FALSE}
+source("convert_units.R")
+source("load_data.R")
+source("plot_data.R")
+```
+
+### Load and crop data
+
+```{r results = "hide", warning = FALSE, message = FALSE}
+filename <- '../data/noaa-goes16/ABI-L2-SSTF/2023/297/12/OR_ABI-L2-SSTF-M6_G16_s20232971200209_e20232971259517_c20232971304395.nc'
+
+limits <- c(-110,-90,5,20)
+
+# Load and crop sst
+sst <- load_data(filename, 'SST')
+sst <- sst - 273 # convert from Kelvin to Celsius
+sst <- crop_data(sst, limits)
+
+# Load and crop dqf
+dqf <- load_data(filename, 'DQF')
+dqf <- crop_data(dqf, limits)
+```
+
+```{r}
+# Plot sst
+plot1 <- ggplot(
+  sst %>% as.data.frame(xy = TRUE)) +
+  geom_raster(aes(x = x, y = y, fill = SST)) +
+  scale_fill_gradientn(colors = terrain.colors(100)) +
+  coord_equal()
+
+# Plot dqf
+plot2 <- ggplot(
+  dqf %>% as.data.frame(xy = TRUE)) +
+  geom_raster(aes(x = x, y = y, fill = DQF)) +
+  scale_fill_gradientn(colors = viridis::viridis(3)) +
+  coord_equal()
+
+(plot1 | plot2)
+```
+
+### Remove low quality sst based on dqf score
+
+```{r}
+# Plot not clear-sky pixels
+temp <- sst
+temp[dqf == 0] = NA
+plot1 <- ggplot(
+  temp %>% as.data.frame(xy = TRUE)) +
+  geom_raster(aes(x = x, y = y, fill = SST)) +
+  scale_fill_gradientn(colors = terrain.colors(100)) +
+  coord_equal()
+
+# Plot clear-sky pixels
+temp <- sst
+temp[dqf != 0] = NA
+plot2 <- ggplot(
+  temp %>% as.data.frame(xy = TRUE)) +
+  geom_raster(aes(x = x, y = y, fill = SST)) +
+  scale_fill_gradientn(colors = terrain.colors(100)) +
+  coord_equal()
+
+(plot1 | plot2 )
+```
+
+```{r}
+# print stats
+print(paste0("dqf: no. of pixels is ", ncell(dqf)))
+print(paste0("dqf: no. of NA pixels is ", sum(is.na(values(dqf)))))
+print(paste0("dqf: no. of clear-sky pixels is ", sum(values(dqf) == 0, na.rm = TRUE)))
+print(paste0("dqf: no. of non clear-sky pixels is ", sum(values(dqf) != 0, na.rm = TRUE)))
+
+# Remove non clear-sky pixels
+sst[dqf != 0] = NA
+print(paste0("sst: no. of NA pixels is ", sum(is.na(values(sst)))))
+print(paste0("sst: no. of clear-sky pixels is ", sum(!is.na(values(sst)))))
+```
+
+
+```{r}
+# Convert to data frame to write to disk
+df <- as.data.frame(sst, xy = TRUE, na.rm = FALSE)
+saveRDS(df, "../outputs/sst.rds", compress = "gzip")
+```
