@@ -1,0 +1,234 @@
+---
+title: "Fit sparse satellite data with inlabru"
+author: "Devaraj Gopinathan"
+date: "Generated on `r format(Sys.time(), '%Y-%m-%d')`"
+output:
+  html_document:
+    df_print: paged
+---
+
+### Importing libraries
+
+```{r results = "hide", warning = FALSE, message = FALSE}
+library(INLA)
+library(inlabru)
+library(fmesher)
+library(ggplot2)
+library(patchwork)
+library(terra)
+library(dplyr)
+library(tidyr)
+```
+
+### Importing data
+
+```{r results = "hide", warning = FALSE, message = FALSE}
+data <- readRDS("../outputs/sst.rds")
+var <- 'SST'
+limits <- c(range(data['x'])[1], range(data['x'])[2], range(data['y'])[1], range(data['y'])[2])
+```
+
+### Create colour scale
+```{r}
+colsc <- function(...) {
+  scale_fill_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "RdYlBu")),
+    name = 'SST',
+    limits = range(..., na.rm = TRUE)
+  )
+}
+```
+
+### Remove na values from observations
+```{r warning=FALSE}
+plot <- ggplot(data) +
+  geom_raster(aes(x = x, y = y, fill = SST)) +
+  scale_fill_gradientn(colors = terrain.colors(100)) +
+  coord_equal()
+
+(plot)
+
+print(paste0("obs: no. of total points is ", ncell(data['SST'])))
+print(paste0("obs: no. of NAs is ", sum(is.na(data['SST']))))
+print(paste0("obs: no. of valid data points is ", sum(!is.na(data['SST']))))
+
+data = data %>% drop_na(var)
+
+plot <- ggplot(data) +
+  geom_raster(aes(x = x, y = y, fill = SST)) +
+  scale_fill_gradientn(colors = terrain.colors(100)) +
+  coord_equal()
+
+(plot)
+
+print(paste0("obs: no. of total points is ", ncell(data['SST'])))
+print(paste0("obs: no. of NAs is ", sum(is.na(data['SST']))))
+print(paste0("obs: no. of valid data points is ", sum(!is.na(data['SST']))))
+
+```
+### Sample observations
+```{r}
+set.seed(1931)
+sample.n <- nrow(data) # 1000
+sample.index = sample(1:nrow(data), sample.n)
+sample.data = data[sample.index,]
+sample_df <- sf::st_as_sf(
+  data.frame(x = sample.data['x'], y = sample.data['y']),
+  coords = c("x", "y")
+)
+sample_df['SST'] <- sample.data['SST']
+
+plot <- ggplot() +
+  gg(sample_df, aes(colour = SST)) +
+  scale_color_gradientn(colors = terrain.colors(100)) +
+  coord_sf()
+
+(plot)
+```
+### Pre-requisites to fit random field - 1 - Create mesh
+```{r}
+region_of_interest <- spoly(
+  data.frame(
+    x = limits[c(1, 2, 2, 1)],
+    y = limits[c(3, 3, 4, 4)]
+  ),
+  format = "sf"
+)
+
+mesh <- fm_mesh_2d(
+  loc = fm_hexagon_lattice(sample_df, edge_len = 0.2),
+  boundary = region_of_interest,
+  max.edge = 0.3
+)
+
+plot <- ggplot() +
+  geom_fm(data = mesh) +
+  gg(sample_df, aes(colour = SST)) +
+  scale_color_gradientn(colors = terrain.colors(100)) +
+  coord_sf()
+
+(plot)
+```
+### Pre-requisites to fit random field - 2 - Specify spde model
+```{r}
+matern <-
+  inla.spde2.pcmatern(mesh,
+    prior.sigma = c(10, 0.01),
+    prior.range = c(1, 0.01)
+  )
+```
+
+### Pre-requisites to fit random field - 3 - Specify model components
+```{r}
+cmp <- SST ~ field(geometry, model = matern) + Intercept(1)
+```
+
+### Fit random field
+```{r}
+fit <- bru(cmp, sample_df, family = "gaussian")
+summary(fit)
+```
+### Predict field on a grid
+```{r}
+grid <- fm_pixels(mesh, dims = c(200, 200))
+pred <- predict(
+  fit,
+  grid,
+  ~ field + Intercept
+)
+```
+
+### Generate samples
+```{r}
+n_samples = 100
+sample <- generate(
+  fit,
+  grid,
+  ~ field + Intercept,
+  n.samples = n_samples
+)
+pred$sample <- sample
+```
+
+### Plot mean and sd of predicted field
+```{r warning=FALSE}
+# Common colour scale for the truth and estimate:
+csc <- colsc(data$SST, pred$mean, pred$sample)
+
+plot_sst <- ggplot(data) +
+  geom_raster(aes(x = x, y = y, fill = SST)) +
+  gg(region_of_interest, alpha = 0) + csc +
+  ggtitle("SST") 
+
+plot_posterior_mean <- ggplot() +
+  gg(pred, aes(fill = mean), geom = "tile") +
+  gg(region_of_interest, alpha = 0) + csc +
+  ggtitle("Posterior mean")
+
+plot_posterior_sd <- ggplot() +
+  gg(pred, aes(color = sd)) +
+  gg(region_of_interest, alpha = 0) +
+  scale_colour_viridis_c(direction = -1, name = 'SST') +
+  ggtitle("Posterior sd")
+
+(plot_sst)
+(plot_posterior_mean)
+(plot_posterior_sd)
+```
+### Store samples
+```{r}
+n_sample_plots = 7
+plot_posterior_sample <- vector("list", n_sample_plots)
+count = 1
+for (i in sample(1:n_samples, 5)) {
+  
+pred$temp <- pred$sample[, i]
+plot_posterior_sample[[count]] <- ggplot() +
+  gg(pred, aes(fill = temp), geom = "tile") +
+  gg(region_of_interest, alpha = 0) + csc +
+  ggtitle(paste0("Posterior sample ", i)) 
+count <- count + 1
+}
+```
+
+### Plot samples
+```{r warning=FALSE}
+(plot_posterior_sample[[1]])
+(plot_posterior_sample[[2]])
+(plot_posterior_sample[[3]])
+(plot_posterior_sample[[4]])
+(plot_posterior_sample[[5]])
+```
+### Write samples to csv
+```{r}
+sample_xy <- sf::st_coordinates(grid)
+sample_df <- data.frame(
+  x = sample_xy[,1],
+  y = sample_xy[,2],
+  value = pred$sample
+)
+sample_df[, 3:ncol(sample_df)] <- lapply(sample_df[, 3:ncol(sample_df)], round, digits = 4)
+write.csv(sample_df, "../outputs/samples.csv", row.names = FALSE)
+```
+
+### Read and plot from file for verification
+```{r}
+temp <- read.csv("../outputs/samples.csv")
+
+i = sample(1:n_samples, 1)
+plot_sample_file <- ggplot(temp) +
+  geom_raster(aes(x = x, y = y, fill = .data[[paste0("value.", i)]])) +
+  gg(region_of_interest, alpha = 0) + csc +
+  ggtitle(paste0("Posterior sample ", i)) 
+
+pred$temp <- pred$sample[, i]
+plot_sample_calc <- ggplot() +
+  gg(pred, aes(fill = temp), geom = "tile") +
+  gg(region_of_interest, alpha = 0) + csc +
+  ggtitle(paste0("Posterior sample ", i)) 
+
+(plot_sample_file)
+(plot_sample_calc)
+```
+
+Acknowledgment: based on `inla-bru` vignette at *https://inlabru-org.github.io/inlabru/articles/random_fields_2d.html*
